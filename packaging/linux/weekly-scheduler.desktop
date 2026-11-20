@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Weekly Assignment Scheduler
+GenericName=Assignment planner
+Comment=Plan each week and print a sheet for every student
+Exec=weekly-scheduler
+Icon=weekly-scheduler
+Terminal=false
+Categories=Office;Education;
+Keywords=school;schedule;assignments;lesson;planner;
+StartupNotify=false

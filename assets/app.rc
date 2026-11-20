@@ -1,0 +1,29 @@
+// Icon (resource 1 is also used for the tray icon), manifest and version details for WeeklyScheduler.exe
+1 ICON "icon.ico"
+1 24 "app.manifest"
+
+1 VERSIONINFO
+FILEVERSION 1,1,0,0
+PRODUCTVERSION 1,1,0,0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Teacher Resource"
+      VALUE "FileDescription", "Weekly Assignment Scheduler"
+      VALUE "FileVersion", "1.1.0"
+      VALUE "InternalName", "WeeklyScheduler"
+      VALUE "LegalCopyright", "Teacher Resource"
+      VALUE "OriginalFilename", "WeeklyScheduler.exe"
+      VALUE "ProductName", "Weekly Assignment Scheduler"
+      VALUE "ProductVersion", "1.1.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

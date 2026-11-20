@@ -1,0 +1,156 @@
+name: Build installers
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: Test
+        run: cargo test --release
+      - name: Build
+        run: cargo build --release
+      - name: Installer
+        shell: pwsh
+        run: |
+          $makensis = (Get-Command makensis -ErrorAction SilentlyContinue).Source
+          if (-not $makensis) { $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe" }
+          if (-not (Test-Path $makensis)) { choco install nsis -y --no-progress; $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe" }
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Force dist | Out-Null
+          & $makensis /V2 "/DVERSION=$v" "/DEXE=..\target\release\WeeklyScheduler.exe" "/DOUTDIR=..\dist" installer\installer.nsi
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-ChildItem dist
+      - name: Try the installer and the app
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem dist\WeeklyScheduler-Setup-*.exe).FullName
+          Start-Process $setup -ArgumentList '/S' -Wait
+          $dir = "$env:LOCALAPPDATA\Programs\Weekly Assignment Scheduler"
+          if (-not (Test-Path "$dir\WeeklyScheduler.exe")) { throw "not installed" }
+          $data = "$env:RUNNER_TEMP\sched-data"
+          $p = Start-Process "$dir\WeeklyScheduler.exe" -ArgumentList '--no-browser','--port','8700','--data-dir',$data -PassThru
+          Start-Sleep 3
+          $who = (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8700/__scheduler).Content
+          if ($who -ne 'weekly-assignment-scheduler') { throw "not answering: $who" }
+          $page = (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8700/print/teacher).StatusCode
+          if ($page -ne 200) { throw "print page failed" }
+          Invoke-WebRequest -UseBasicParsing -Method Post -Headers @{ 'X-Scheduler' = '1' } -Body '{}' http://127.0.0.1:8700/api/quit | Out-Null
+          if (-not $p.WaitForExit(10000)) { throw "Quit did not stop the app" }
+          if (-not (Test-Path "$data\scheduler.db")) { throw "no scheduler.db" }
+          Start-Process "$dir\Uninstall.exe" -ArgumentList '/S',"_?=$dir" -Wait
+          if (Test-Path "$dir\WeeklyScheduler.exe") { throw "uninstall left the program" }
+          if (-not (Test-Path "$data\scheduler.db")) { throw "uninstall removed the data" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            arch: amd64
+          - os: ubuntu-22.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: Test
+        run: cargo test --release
+      - name: Build
+        run: cargo build --release
+      - name: Package
+        run: bash scripts/package-linux.sh target/release/WeeklyScheduler ${{ matrix.arch }}
+      - name: Try the package and the app
+        run: |
+          sudo apt-get install -y ./dist/weekly-scheduler_*_${{ matrix.arch }}.deb
+          weekly-scheduler --version
+          weekly-scheduler --no-browser --port 8700 --data-dir "$RUNNER_TEMP/data" &
+          sleep 2
+          test "$(curl -s http://127.0.0.1:8700/__scheduler)" = weekly-assignment-scheduler
+          curl -sf -o /dev/null http://127.0.0.1:8700/print/teacher
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8700/api/grades -d '{}')" = 403
+          curl -sf -X POST -H 'X-Scheduler: 1' -d '{}' http://127.0.0.1:8700/api/quit
+          sleep 1
+          if curl -s http://127.0.0.1:8700/__scheduler; then echo "Quit did not stop the app"; exit 1; fi
+          test -f "$RUNNER_TEMP/data/scheduler.db"
+          sudo apt-get remove -y weekly-scheduler
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal && rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Test
+        run: cargo test --release
+      - name: Build and package
+        run: bash scripts/package-macos.sh
+      - name: Try the app
+        run: |
+          hdiutil attach dist/WeeklyScheduler-*-mac.dmg -mountpoint /tmp/wsdmg -nobrowse
+          APP="/tmp/wsdmg/Weekly Assignment Scheduler.app"
+          lipo -archs "$APP/Contents/MacOS/WeeklyScheduler"
+          "$APP/Contents/MacOS/WeeklyScheduler" --version
+          "$APP/Contents/MacOS/WeeklyScheduler" --no-browser --port 8700 --data-dir "$RUNNER_TEMP/data" &
+          PID=$!
+          sleep 3
+          test "$(curl -s http://127.0.0.1:8700/__scheduler)" = weekly-assignment-scheduler
+          curl -sf -o /dev/null http://127.0.0.1:8700/print/teacher
+          curl -sf -X POST -H 'X-Scheduler: 1' -d '{}' http://127.0.0.1:8700/api/quit
+          for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 $PID 2>/dev/null || break; sleep 1; done
+          if kill -0 $PID 2>/dev/null; then echo "Quit did not stop the app"; exit 1; fi
+          test -f "$RUNNER_TEMP/data/scheduler.db"
+          hdiutil detach /tmp/wsdmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body: |
+            **Windows:** download `WeeklyScheduler-Setup-…exe` and run it. If Windows says "Windows protected your PC", click **More info → Run anyway** (the installer isn't signed yet).
+
+            **Mac:** download `WeeklyScheduler-…-mac.dmg`, open it and drag the app to Applications. The first time, macOS will stop it: open **System Settings → Privacy & Security** and click **Open Anyway**. Works on Apple Silicon and Intel Macs (macOS 11 or newer).
+
+            **Linux:** on Ubuntu, Debian or Mint, download the `.deb` for your computer (`amd64` for most PCs, `arm64` for a Raspberry Pi 4/5 or ARM laptop) and open it, or `sudo apt install ./weekly-scheduler_…deb`. For other distributions, use the `.tar.gz` and run `./install.sh`.
+
+            Your schedule is kept in **Documents/Weekly Assignment Scheduler**. Already using the scheduler? Open **Settings → Your data → Use a different scheduler.db…** and pick your file.
