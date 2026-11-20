@@ -90,7 +90,7 @@ Packaging:
 - **Linux:** `scripts/package-linux.sh` → `.deb` and `.tar.gz` in `dist/`
 - From Linux you can also cross-compile the Windows installer with mingw-w64 and NSIS: `scripts/build-windows-on-linux.sh`
 
-GitHub Actions (`.github/workflows/build.yml`) builds and tries out all of these on every push. Pushing a tag like `v1.1.0` publishes them on the Releases page.
+GitHub Actions (`.github/workflows/build.yml`) builds and tries out all of these on every push. To publish a new version, raise `version` in `Cargo.toml` (and the numbers in `assets/app.rc`) and push to `main`: when the builds pass, they appear on the Releases page under that version.
 
 ### How the code is laid out
 

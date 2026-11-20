@@ -132,19 +132,40 @@ jobs:
           name: macos
           path: dist/*
 
+  # A new version number in Cargo.toml on main (or a v* tag) publishes a release.
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: [windows, linux, macos]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - name: Is this version released yet?
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          echo "tag=$V" >> "$GITHUB_OUTPUT"
+          if gh release view "$V" >/dev/null 2>&1; then
+            echo "$V is already released; nothing to do."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/download-artifact@v4
+        if: steps.v.outputs.new == 'true'
         with:
           path: dist
           merge-multiple: true
       - name: Checksums
+        if: steps.v.outputs.new == 'true'
         run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
+        if: steps.v.outputs.new == 'true'
         with:
+          tag_name: ${{ steps.v.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Weekly Assignment Scheduler ${{ steps.v.outputs.tag }}
           files: dist/*
           body: |
             **Windows:** download `WeeklyScheduler-Setup-…exe` and run it. If Windows says "Windows protected your PC", click **More info → Run anyway** (the installer isn't signed yet).
